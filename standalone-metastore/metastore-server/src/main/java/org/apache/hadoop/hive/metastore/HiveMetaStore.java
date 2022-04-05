@@ -465,9 +465,9 @@ public class HiveMetaStore extends ThriftHiveMetastore {
     connector.setPort(port);
     connector.setReuseAddress(true);
     // TODO: What should the idle timeout be for the metastore? Currently it is 30 minutes
-    int maxIdleTimeout = (int)MetastoreConf.getTimeVar(conf, ConfVars.METASTORE_THRIFT_HTTP_MAX_IDLE_TIME,
-        TimeUnit.MILLISECONDS);
-    connector.setIdleTimeout(maxIdleTimeout);
+    //int maxIdleTimeout = (int)MetastoreConf.getTimeVar(conf, ConfVars.METASTORE_THRIFT_HTTP_MAX_IDLE_TIME,
+    //    TimeUnit.MILLISECONDS);
+    connector.setIdleTimeout(120*1000);
     // TODO: AcceptQueueSize needs to be higher for HMS
     connector.setAcceptQueueSize(maxWorkerThreads);
     // TODO: Connection keepalive configuration?

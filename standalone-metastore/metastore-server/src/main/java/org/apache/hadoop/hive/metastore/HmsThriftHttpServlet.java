@@ -92,47 +92,50 @@ public class HmsThriftHttpServlet extends TServlet {
             request.getHeader(headerName));
       }
     }
-
-    String userFromHeader = extractUserName(request, response);
-    if (userFromHeader == null || userFromHeader.isEmpty()) {
-      throw new ServletException("Could not fetch username from request header");
-    }
-
-    // TODO: These should ideally be in some kind of a Cache with Weak referencse.
-    // If HMS were to set up some kind of a session, this would go into the session by having
-    // this filter work with a custom Processor / or set the username into the session
-    // as is done for HS2.
-    // In case of HMS, it looks like each request is independent, and there is no session
-    // information, so the UGI needs to be set up in the Connection layer itself.
-    UserGroupInformation clientUgi;
-    // Temporary, and useless for now. Here only to allow this to work on an otherwise kerberized
-    // server.
-    if (isSecurityEnabled) {
-      LOG.info("Creating proxy user for: {}", userFromHeader);
-      clientUgi = UserGroupInformation.createProxyUser(userFromHeader, UserGroupInformation.getLoginUser());
-    } else {
-      LOG.info("Creating remote user for: {}", userFromHeader);
-      clientUgi = UserGroupInformation.createRemoteUser(userFromHeader);
-    }
-
-
-    PrivilegedExceptionAction<Void> action = new PrivilegedExceptionAction<Void>() {
-      @Override
-      public Void run() throws Exception {
-        HmsThriftHttpServlet.super.doPost(request, response);
-        return null;
-      }
-    };
-
     try {
-      clientUgi.doAs(action);
-    } catch (InterruptedException | RuntimeException e) {
-      // TODO: Exception handling likely needs to be better, so that the client
-      // can make better sense of what has gone wrong. Lookup what this looks like
-      // in the default thrift binary interface.
-      LOG.info("Exception while processing call", e);
-      response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
-          "C1C User Header missing");
+      String userFromHeader = extractUserName(request, response);
+
+      // TODO: These should ideally be in some kind of a Cache with Weak referencse.
+      // If HMS were to set up some kind of a session, this would go into the session by having
+      // this filter work with a custom Processor / or set the username into the session
+      // as is done for HS2.
+      // In case of HMS, it looks like each request is independent, and there is no session
+      // information, so the UGI needs to be set up in the Connection layer itself.
+      UserGroupInformation clientUgi;
+      // Temporary, and useless for now. Here only to allow this to work on an otherwise kerberized
+      // server.
+      if (isSecurityEnabled) {
+        LOG.info("Creating proxy user for: {}", userFromHeader);
+        clientUgi = UserGroupInformation.createProxyUser(userFromHeader, UserGroupInformation.getLoginUser());
+      } else {
+        LOG.info("Creating remote user for: {}", userFromHeader);
+        clientUgi = UserGroupInformation.createRemoteUser(userFromHeader);
+      }
+
+
+      PrivilegedExceptionAction<Void> action = new PrivilegedExceptionAction<Void>() {
+        @Override
+        public Void run() throws Exception {
+          HmsThriftHttpServlet.super.doPost(request, response);
+          return null;
+        }
+      };
+
+      try {
+        clientUgi.doAs(action);
+      } catch (InterruptedException | RuntimeException e) {
+        // TODO: Exception handling likely needs to be better, so that the client
+        // can make better sense of what has gone wrong. Lookup what this looks like
+        // in the default thrift binary interface.
+        LOG.info("Exception while processing call", e);
+        response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+            "C1C User Header missing");
+      }
+    } catch (HttpAuthenticationException e) {
+      response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+      response.getWriter().println("Authentication error: " + e.getMessage());
+      // Also log the error message on server side
+      LOG.error("Authentication error: ", e);
     }
   }
 
@@ -174,11 +177,11 @@ public class HmsThriftHttpServlet extends TServlet {
   }
 
   private String extractUserName(HttpServletRequest request, HttpServletResponse response)
-      throws ServletException {
+      throws HttpAuthenticationException {
     if (!jwtAuthEnabled) {
       String userFromHeader = request.getHeader(X_USER);
       if (userFromHeader == null || userFromHeader.isEmpty()) {
-        throw new ServletException("User header " + X_USER + " missing in request");
+        throw new HttpAuthenticationException("User header " + X_USER + " missing in request");
       }
       return userFromHeader;
     }
@@ -196,16 +199,18 @@ public class HmsThriftHttpServlet extends TServlet {
 
     String signedJwt = extractBearerToken(request, response);
     if (signedJwt == null) {
-      throw new ServletException("Couldn't find bearer token in the auth header in the request");
+      throw new HttpAuthenticationException("Couldn't find bearer token in the auth header in the request");
     }
     String user;
     try {
       user = jwtValidator.validateJWTAndExtractUser(signedJwt);
       Preconditions.checkNotNull(user, "JWT needs to contain the user name as subject");
-      Preconditions.checkState(!user.isEmpty(), "User name should not be empty");
-      LOG.info("JWT verification successful for user {}", user);
+      Preconditions.checkState(!user.isEmpty(), "User name should not be empty in JWT");
+      LOG.info("Successfully validated and extracted user name {} from JWT in Auth "
+          + "header in the request", user);
     } catch (Exception e) {
-      throw new ServletException("Failed to extract JWT from Bearer token", e);
+      throw new HttpAuthenticationException("Failed to validate JWT from Bearer token in "
+          + "Authentication header", e);
     }
     return user;
   }
